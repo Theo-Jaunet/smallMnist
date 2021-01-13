@@ -8,7 +8,11 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.optim.lr_scheduler import StepLR
 import numpy as np
-#from run import merge_img, format_saliency
+
+import csv
+
+
+# from run import merge_img, format_saliency
 
 
 class Net(nn.Module):
@@ -33,17 +37,18 @@ class Net(nn.Module):
         x = F.relu(x)
         x = self.dropout2(x)
         x = self.fc2(x)
-        output = F.log_softmax(x, dim=1)
+        output = F.softmax(x, dim=1)
         return output
 
 
 def train(args, model, device, train_loader, optimizer, epoch):
     model.train()
+    temp = nn.CrossEntropyLoss()
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         output = model(data)
-        loss = F.nll_loss(output, target)
+        loss = temp(output, target)
         loss.backward()
         optimizer.step()
         if batch_idx % args.log_interval == 0:
@@ -55,48 +60,47 @@ def train(args, model, device, train_loader, optimizer, epoch):
 def test(model, device, test_loader):
     i = 0
     imgs = []
-    for data, target in test_loader:
-        data, target = data.to(device), target.to(device)
+    model.eval()
+    pref = 0
 
-        data.requires_grad = True
-        output = model(data)
+    with open("preds.csv", "w") as f:
+        spamwriter = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
+        spamwriter.writerow(
+            ["id", "pred", "label", "eval", "prob_0", "prob_1", "prob_2", "prob_3", "prob_4", "prob_5", "prob_6",
+             "prob_7", "prob_8", "prob_9"])
 
-        one_hot = torch.FloatTensor(1, 10).zero_().to(device)
-        one_hot[0][target] = 1
+        for data, target in test_loader:
+            data, target = data.to(device), target.to(device)
 
-        output.backward(gradient=one_hot)
+            output = model(data)
+            top = output.argmax().item()
 
-        grads = data.grad.clone()
-        grads.squeeze_(0)
-        grads = grads.permute(1,2,0)
+            if output.argmax() == target:
+                pref += 1
+            else:
 
-        grads = np.amax(grads.cpu().numpy(), axis=2)
+                data.detach_().squeeze_()
+                data = data.cpu().numpy()
+                data -= data.min()
+                data /= data.max()
+                data *= 254
+                data = data.astype(np.int8)
 
-        # Normalisation
-        grads -= grads.min()
-        grads /= grads.max()
-        grads *= 254
-        # converstion vers image
-        grads = grads.astype(np.int8)
-        saliency = Image.fromarray(grads, 'L')
-        saliency.save("images/saliency_" + str(i) + ".jpg")
+                inp = Image.fromarray(data, 'L')
+                inp.save("images/input_" + str(i) + "_pred_" + str(top) + "_label_" + str(target.item()) + ".jpg")
 
-        data.detach_().squeeze_()
-        data = data.cpu().numpy()
-        data -= data.min()
-        data /= data.max()
-        data *= 254
-        data = data.astype(np.int8)
-        inp = Image.fromarray(data, 'L')
-        inp.save("images/input_" + str(i) + ".jpg")
+                if output.max() < 0.6:
+                    print(output)
 
-        #grads = format_saliency(saliency)
-        #imgs.append(merge_img(data, grads, i))
+            temp = output.detach().cpu().numpy()[0].tolist()
 
-        i += 1
+            spamwriter.writerow([i, top, target.item(), (output.argmax() == target).item()]+ temp)
 
-        if i > 0:
-            break
+            i += 1
+
+            # if i > 6000:
+            #     break
+    print(pref / i)
 
 
 def main():
